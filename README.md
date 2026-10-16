@@ -8,12 +8,12 @@ A real-time ANPR engine running on the edge computer beside each camera — plat
 
 ## Overview
 
-The engine runs on the edge computer next to each camera: frames arrive over RTSP or straight from a Basler industrial camera, get run through YOLOv4 plate detection and OCR, and are tracked across frames so that each vehicle's clearest frame is the one that gets stored. Finished records are written to a local MySQL database and pushed to a central server over an encrypted REST API.
+The engine runs on the edge computer next to each camera: frames arrive over RTSP or straight from a Basler industrial camera, get run through YOLOv4-family plate detection and OCR, and are tracked across frames so that each vehicle's clearest frame is the one that gets stored. Finished records are written to a local MySQL database and pushed to a central server over an encrypted REST API.
 
-Built end to end — training data, the multithreaded C++ pipeline, and deployment on both NVIDIA Jetson boards and low-power industrial PCs.
+The deployment grew from an 8-camera pilot to 74 cameras at customer parking gates and industrial sites.
 
-- **Company:** Anamis Electronic Vira, Bandar Abbas
-- **Role:** Computer Vision & Perception Engineer
+- **Company:** Anamis Electronic Vira (GambroTech), Bandar Abbas — ITS startup, ~15 technical staff
+- **Role:** Computer Vision Engineer (Junior → Mid-level), full-time
 - **Timeframe:** 10/2022 — 02/2025
 
 ## Problem & context
@@ -22,7 +22,7 @@ The engine had to read plates reliably for customers' parking gates and industri
 
 ## My role
 
-I owned the computer-vision and edge-software side of this project: selected and structured the training data, trained and evaluated the detection models, wrote the real-time C++ pipeline end to end, integrated the Basler cameras, and designed the REST APIs plus the C++ DLL that the company's existing C# UI application calls into via P/Invoke.
+I was a core developer of the company's edge ANPR engine, with growing ownership of its perception pipeline and edge deployment: I developed the detection and OCR pipeline, trained and evaluated the detection models, migrated the performance-critical parts to multithreaded C++, integrated the Basler cameras, and implemented the REST APIs plus the C++ DLL that the UI team's C# application calls into via P/Invoke.
 
 ## Architecture
 
@@ -36,42 +36,46 @@ Basler camera            Edge computer                MySQL          REST API   
 ## Key technical decisions
 
 ### Data and model
-- Selected and curated 7,000+ real-world images of cars, motorcycles and plates — different weather, light and viewing angles — and defined the dataset structure for the plate-reading model.
-- Trained and evaluated several YOLOv4 detection models, trading detection accuracy against inference speed on constrained edge hardware.
+- The training data was a 7,000+ image field dataset of cars, motorcycles and plates — different weather, light and viewing angles. I had selected and curated these images and defined the dataset structure toward the end of my working-student role at the company; annotation was done by a fellow trainee.
+- Trained and evaluated YOLOv4-family detection models (YOLOv4-tiny for edge deployment) on this dataset, balancing accuracy and speed for low-power hardware.
 
 ### Real-time C++ pipeline
-- Moved the performance-critical parts from Python to multithreaded C++: RTSP frame acquisition, YOLO inference, OCR post-processing and MySQL storage, with the life cycle of every camera connection managed by the engine.
-- Evaluated OpenCV, GStreamer and libVLC as streaming back ends to keep frames flowing over unstable camera links.
-- Skipped static frames with frame-level motion detection, and added direction of travel, multi-object tracking and automatic selection of each vehicle's clearest frame for the most reliable read.
+- Migrated the performance-critical parts from Python to multithreaded C++: RTSP frame ingestion, YOLO inference, OCR post-processing, MySQL storage and camera reconnection handling.
+- Evaluated OpenCV, GStreamer and libVLC as streaming back ends to cope with unstable camera links.
+- Added motion-gated processing (skipping static frames), direction-of-travel detection, multi-object tracking and best-frame selection per vehicle to improve OCR reliability.
 
 ### Running on weak edge hardware
-- Up to 12 FPS end to end — frame in, database row out — on standard edge PCs, with frame buffering so bursts of traffic aren't lost.
-- On an Intel Atom E3845 capped at 5 FPS against a 15 FPS camera, under 5% of the street traffic was captured; motion-gated, centre-ROI buffering feeding a dedicated YOLO thread raised coverage to 91% within the same budget.
-- On NVIDIA Jetson Nano, TensorRT brought YOLOv4 to ~25 FPS — no missed vehicles on up to 4 cameras per device. A CUDA-accelerated OpenCV DNN mode scaled denser multi-camera sites.
+- Up to ~12 FPS end to end — frame ingestion to database — on the standard company edge PCs (CPU-only processing).
+- On NVIDIA Jetson Nano, optimised YOLOv4-tiny with TensorRT (FP16) to ~25 FPS inference, serving up to 4 gate cameras per device with motion gating.
+- Added a CUDA-accelerated OpenCV DNN mode for multi-camera sites; hands-on testing of ONNX Runtime.
+- Reduced RAM and CPU usage to run on Jetson Nano and other low-power industrial edge PCs.
+- On the weakest deployed hardware (Intel Atom E3845, CPU only, pipeline capped at ~5 FPS vs. a 15 FPS camera), at an entry/exit-logging gate without a barrier where vehicles passed faster, I redesigned buffering with a motion-gated centre-ROI buffer feeding a dedicated inference thread. This raised vehicle capture from under 30% to ~70% within the same compute budget; peak traffic could still overflow the buffer.
 
 ### Cameras and integration
-- Integrated Basler industrial cameras through the Pylon SDK in C++: direct frame acquisition, exposure control and sync with the external LED flash.
-- Designed encrypted REST APIs over HTTPS/TLS: one for camera-to-server data, and an integration API the web UI used to control the engine and fetch results.
-- Wrote a native C++ DLL with the plate-recognition logic, used through P/Invoke by the production C# UI application.
+- Integrated Basler industrial cameras through the Pylon SDK in C++: frame acquisition, exposure control and synchronisation with the LED flash.
+- Implemented REST APIs over HTTPS/TLS: one for camera-to-server data transfer, and one the web UI used to control the engine and fetch results.
+- Wrote a native C++ DLL with the plate-recognition logic, exposed via P/Invoke and used in production by the UI team's C# application.
 
-## Real deployment — 70+ cameras in three cities
+## Real deployment — from 8 to 74 cameras
 
-The engine was piloted on 8 cameras for customers' parking gates and industrial-site access control, then — based on the measured accuracy — scaled to more than 70 cameras across three cities, 50+ of them in Bandar Abbas, Iran. Accuracy was measured in real-world, varied-weather conditions.
+The engine was piloted on 8 cameras for customers' parking gates and industrial-site access control, then rolled out to 74 cameras at customer parking gates and industrial sites.
+
+**Field test (09/2024):** 1,200 vehicles at barrier gates on GPU-based hardware, manually verified and spread over all 24 hours of the day (all lighting conditions). No vehicle was missed and 99.4% of plates were read exactly right; each of the 7 errors was a single wrong character on a damaged or dirty plate. A repeat test months apart under similar conditions confirmed the result.
 
 *Published with the permission of Anamis Electronic Vira.*
 
 | Metric | Value | Context |
 |---|---|---|
-| Plate detection accuracy | 99.1% | real-world, varied weather |
-| Character recognition | 97.4% | real-world, varied weather |
-| Cameras deployed | 70+ | 8-camera pilot → three cities |
-| End-to-end throughput | 12 FPS | frame in → database row, standard edge PC |
-| NVIDIA Jetson Nano | ~25 FPS | TensorRT, no missed vehicles on up to 4 cameras |
-| Capture coverage, Intel Atom | 5% → 91% | motion-gated frame buffering, same 5 FPS budget |
+| Missed vehicles | 0 of 1,200 | field test 09/2024, barrier gates, GPU-based hardware, all 24 hours |
+| Exact plate reads | 99.4% | same field test; all 7 errors were a single wrong character on a damaged or dirty plate |
+| Cameras deployed | 74 | grown from an 8-camera pilot |
+| End-to-end throughput | up to ~12 FPS | frame ingestion → database, standard edge PC, CPU only |
+| NVIDIA Jetson Nano | ~25 FPS inference | YOLOv4-tiny, TensorRT FP16, up to 4 gate cameras per device |
+| Vehicle capture, Intel Atom E3845 | <30% → ~70% | motion-gated centre-ROI buffering, same ~5 FPS budget |
 
 ## Tech stack
 
-C++ · Python · OpenCV · YOLOv4 · PyTorch · CUDA · TensorRT · NVIDIA Jetson · Embedded Linux · Multithreading · RTSP · GStreamer · libVLC · Basler Pylon SDK · MySQL · REST APIs (HTTPS/TLS) · Multi-object tracking · C++ DLL / P/Invoke
+C++ · Python · OpenCV · YOLOv4 family (YOLOv4-tiny) · CUDA · TensorRT · ONNX Runtime (testing) · NVIDIA Jetson · Embedded Linux · Multithreading · RTSP · GStreamer · libVLC · Basler Pylon SDK · MySQL · REST APIs (HTTPS/TLS) · Multi-object tracking · C++ DLL / P/Invoke
 
 ## Source code
 
